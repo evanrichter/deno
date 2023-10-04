@@ -1,17 +1,27 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use crate::NodeModuleKind;
+use crate::NodePermissions;
 
-use super::RequireNpmResolver;
+use super::NpmResolver;
+
 use deno_core::anyhow;
 use deno_core::anyhow::bail;
 use deno_core::error::AnyError;
 use deno_core::serde_json;
 use deno_core::serde_json::Map;
 use deno_core::serde_json::Value;
+use deno_core::ModuleSpecifier;
+use indexmap::IndexMap;
 use serde::Serialize;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+
+thread_local! {
+  static CACHE: RefCell<HashMap<PathBuf, PackageJson>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PackageJson {
@@ -22,9 +32,13 @@ pub struct PackageJson {
   main: Option<String>,   // use .main(...)
   module: Option<String>, // use .main(...)
   pub name: Option<String>,
+  pub version: Option<String>,
   pub path: PathBuf,
   pub typ: String,
   pub types: Option<String>,
+  pub dependencies: Option<HashMap<String, String>>,
+  pub dev_dependencies: Option<HashMap<String, String>>,
+  pub scripts: Option<IndexMap<String, String>>,
 }
 
 impl PackageJson {
@@ -37,18 +51,37 @@ impl PackageJson {
       main: None,
       module: None,
       name: None,
+      version: None,
       path,
       typ: "none".to_string(),
       types: None,
+      dependencies: None,
+      dev_dependencies: None,
+      scripts: None,
     }
   }
 
   pub fn load(
-    resolver: &dyn RequireNpmResolver,
+    fs: &dyn deno_fs::FileSystem,
+    resolver: &dyn NpmResolver,
+    permissions: &dyn NodePermissions,
     path: PathBuf,
   ) -> Result<PackageJson, AnyError> {
-    resolver.ensure_read_permission(&path)?;
-    let source = match std::fs::read_to_string(&path) {
+    resolver.ensure_read_permission(permissions, &path)?;
+    Self::load_skip_read_permission(fs, path)
+  }
+
+  pub fn load_skip_read_permission(
+    fs: &dyn deno_fs::FileSystem,
+    path: PathBuf,
+  ) -> Result<PackageJson, AnyError> {
+    assert!(path.is_absolute());
+
+    if CACHE.with(|cache| cache.borrow().contains_key(&path)) {
+      return Ok(CACHE.with(|cache| cache.borrow()[&path].clone()));
+    }
+
+    let source = match fs.read_text_file_sync(&path) {
       Ok(source) => source,
       Err(err) if err.kind() == ErrorKind::NotFound => {
         return Ok(PackageJson::empty(path));
@@ -56,7 +89,7 @@ impl PackageJson {
       Err(err) => bail!(
         "Error loading package.json at {}. {:#}",
         path.display(),
-        err
+        AnyError::from(err),
       ),
     };
 
@@ -64,23 +97,43 @@ impl PackageJson {
       return Ok(PackageJson::empty(path));
     }
 
+    let package_json = Self::load_from_string(path, source)?;
+    CACHE.with(|cache| {
+      cache
+        .borrow_mut()
+        .insert(package_json.path.clone(), package_json.clone());
+    });
+    Ok(package_json)
+  }
+
+  pub fn load_from_string(
+    path: PathBuf,
+    source: String,
+  ) -> Result<PackageJson, AnyError> {
     let package_json: Value = serde_json::from_str(&source)
       .map_err(|err| anyhow::anyhow!("malformed package.json {}", err))?;
+    Self::load_from_value(path, package_json)
+  }
 
+  pub fn load_from_value(
+    path: PathBuf,
+    package_json: serde_json::Value,
+  ) -> Result<PackageJson, AnyError> {
     let imports_val = package_json.get("imports");
     let main_val = package_json.get("main");
     let module_val = package_json.get("module");
     let name_val = package_json.get("name");
+    let version_val = package_json.get("version");
     let type_val = package_json.get("type");
     let bin = package_json.get("bin").map(ToOwned::to_owned);
-    let exports = package_json.get("exports").map(|exports| {
-      if is_conditional_exports_main_sugar(exports) {
+    let exports = package_json.get("exports").and_then(|exports| {
+      Some(if is_conditional_exports_main_sugar(exports) {
         let mut map = Map::new();
         map.insert(".".to_string(), exports.to_owned());
         map
       } else {
-        exports.as_object().unwrap().to_owned()
-      }
+        exports.as_object()?.to_owned()
+      })
     });
 
     let imports = imports_val
@@ -88,7 +141,31 @@ impl PackageJson {
       .map(|imp| imp.to_owned());
     let main = main_val.and_then(|s| s.as_str()).map(|s| s.to_string());
     let name = name_val.and_then(|s| s.as_str()).map(|s| s.to_string());
+    let version = version_val.and_then(|s| s.as_str()).map(|s| s.to_string());
     let module = module_val.and_then(|s| s.as_str()).map(|s| s.to_string());
+
+    let dependencies = package_json.get("dependencies").and_then(|d| {
+      if d.is_object() {
+        let deps: HashMap<String, String> =
+          serde_json::from_value(d.to_owned()).unwrap();
+        Some(deps)
+      } else {
+        None
+      }
+    });
+    let dev_dependencies = package_json.get("devDependencies").and_then(|d| {
+      if d.is_object() {
+        let deps: HashMap<String, String> =
+          serde_json::from_value(d.to_owned()).unwrap();
+        Some(deps)
+      } else {
+        None
+      }
+    });
+
+    let scripts: Option<IndexMap<String, String>> = package_json
+      .get("scripts")
+      .and_then(|d| serde_json::from_value(d.to_owned()).ok());
 
     // Ignore unknown types for forwards compatibility
     let typ = if let Some(t) = type_val {
@@ -116,13 +193,18 @@ impl PackageJson {
       path,
       main,
       name,
+      version,
       module,
       typ,
       types,
       exports,
       imports,
       bin,
+      dependencies,
+      dev_dependencies,
+      scripts,
     };
+
     Ok(package_json)
   }
 
@@ -132,6 +214,10 @@ impl PackageJson {
     } else {
       self.main.as_ref()
     }
+  }
+
+  pub fn specifier(&self) -> ModuleSpecifier {
+    ModuleSpecifier::from_file_path(&self.path).unwrap()
   }
 }
 
@@ -160,4 +246,20 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
   }
 
   is_conditional_sugar
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn null_exports_should_not_crash() {
+    let package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      r#"{ "exports": null }"#.to_string(),
+    )
+    .unwrap();
+
+    assert!(package_json.exports.is_none());
+  }
 }

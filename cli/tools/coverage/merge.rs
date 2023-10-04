@@ -1,6 +1,7 @@
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+//
 // Forked from https://github.com/demurgos/v8-coverage/tree/d0ca18da8740198681e0bc68971b0a6cdb11db3e/rust
 // Copyright 2021 Charles Samborski. All rights reserved. MIT license.
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
 use super::json_types::CoverageRange;
 use super::json_types::FunctionCoverage;
@@ -73,8 +74,8 @@ pub fn merge_scripts(
   }
 
   let functions: Vec<FunctionCoverage> = range_to_funcs
-    .into_iter()
-    .map(|(_, funcs)| merge_functions(funcs).unwrap())
+    .into_values()
+    .map(|funcs| merge_functions(funcs).unwrap())
     .collect();
 
   Some(ScriptCoverage {
@@ -126,8 +127,7 @@ pub fn merge_functions(
       trees.push(tree);
     }
   }
-  let merged =
-    RangeTree::normalize(&rta, merge_range_trees(&rta, trees).unwrap());
+  let merged = RangeTree::normalize(merge_range_trees(&rta, trees).unwrap());
   let ranges = merged.to_ranges();
   let is_block_coverage: bool = !(ranges.len() == 1 && ranges[0].count == 0);
 
@@ -229,7 +229,7 @@ impl<'a> Iterator for StartEventQueue<'a> {
               let mut result = self.queue.next().unwrap();
               if pending_offset == queue_offset {
                 let pending_trees = self.pending.take().unwrap().trees;
-                result.trees.extend(pending_trees.into_iter())
+                result.trees.extend(pending_trees)
               }
               Some(result)
             }
@@ -338,7 +338,7 @@ fn merge_range_tree_children<'a>(
 
   let child_forests: Vec<Vec<&'a mut RangeTree<'a>>> = flat_children
     .into_iter()
-    .zip(wrapped_children.into_iter())
+    .zip(wrapped_children)
     .map(|(flat, wrapped)| merge_children_lists(flat, wrapped))
     .collect();
 
@@ -356,7 +356,11 @@ fn merge_range_tree_children<'a>(
     let mut matching_trees: Vec<&'a mut RangeTree<'a>> = Vec::new();
     for (_parent_index, children) in child_forests.iter_mut().enumerate() {
       let next_tree: Option<&'a mut RangeTree<'a>> = {
-        if children.peek().map_or(false, |tree| tree.start == *event) {
+        if children
+          .peek()
+          .map(|tree| tree.start == *event)
+          .unwrap_or(false)
+        {
           children.next()
         } else {
           None

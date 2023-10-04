@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 // Requires to be run with `--allow-net` flag
 
@@ -115,6 +115,26 @@ Deno.test({
 
     w.postMessage("Hello, world!");
     assertEquals(await promise, "true, true, true, true");
+    w.terminate();
+  },
+});
+
+Deno.test({
+  name: "worker navigator",
+  fn: async function () {
+    const workerOptions: WorkerOptions = { type: "module" };
+    const w = new Worker(
+      import.meta.resolve("./worker_navigator.ts"),
+      workerOptions,
+    );
+
+    const promise = deferred();
+    w.onmessage = (e) => {
+      promise.resolve(e.data);
+    };
+
+    w.postMessage("Hello, world!");
+    assertEquals(await promise, "string, object, string, number");
     w.terminate();
   },
 });
@@ -588,7 +608,7 @@ Deno.test("Worker with invalid permission arg", function () {
         deno: { permissions: { env: "foo" } },
       }),
     TypeError,
-    'Error parsing args at position 0: (deno.permissions.env) invalid value: string "foo", expected "inherit" or boolean or string[]',
+    '(deno.permissions.env) invalid value: string "foo", expected "inherit" or boolean or string[]',
   );
 });
 

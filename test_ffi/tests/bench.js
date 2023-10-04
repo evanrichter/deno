@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 // deno-lint-ignore-file
 
 const targetDir = Deno.execPath().replace(/[^\/\\]+$/, "");
@@ -251,7 +251,7 @@ Deno.bench("hash()", () => {
 const { ffi_string } = dylib.symbols;
 Deno.bench(
   "c string",
-  () => new Deno.UnsafePointerView(ffi_string()).getCString(),
+  () => Deno.UnsafePointerView.getCString(ffi_string()),
 );
 
 const { add_u32 } = dylib.symbols;
@@ -354,8 +354,6 @@ Deno.bench("nop_f64()", () => {
 
 const { nop_buffer } = dylib.symbols;
 const buffer = new Uint8Array(8).fill(5);
-// Make sure the buffer does not get collected
-globalThis.buffer = buffer;
 Deno.bench("nop_buffer()", () => {
   nop_buffer(buffer);
 });
@@ -565,8 +563,6 @@ Deno.bench("return_buffer_nonblocking()", async () => {
 
 const { nop_many_parameters } = dylib.symbols;
 const buffer2 = new Uint8Array(8).fill(25);
-// Make sure the buffer does not get collected
-globalThis.buffer2 = buffer2;
 Deno.bench("nop_many_parameters()", () => {
   nop_many_parameters(
     135,
@@ -635,11 +631,57 @@ Deno.bench("Deno.UnsafePointer.of", () => {
 });
 
 const cstringBuffer = new TextEncoder().encode("Best believe it!\0");
-// Make sure the buffer does not get collected
-globalThis.cstringBuffer = cstringBuffer;
 const cstringPointerView = new Deno.UnsafePointerView(
   Deno.UnsafePointer.of(cstringBuffer),
 );
 Deno.bench("Deno.UnsafePointerView#getCString", () => {
   cstringPointerView.getCString();
+});
+
+const bufferPointerView = new Deno.UnsafePointerView(
+  Deno.UnsafePointer.of(buffer),
+);
+
+Deno.bench("Deno.UnsafePointerView#getBool", () => {
+  bufferPointerView.getBool();
+});
+
+Deno.bench("Deno.UnsafePointerView#getUint8", () => {
+  bufferPointerView.getUint8();
+});
+
+Deno.bench("Deno.UnsafePointerView#getInt8", () => {
+  bufferPointerView.getInt8();
+});
+
+Deno.bench("Deno.UnsafePointerView#getUint16", () => {
+  bufferPointerView.getUint16();
+});
+
+Deno.bench("Deno.UnsafePointerView#getInt16", () => {
+  bufferPointerView.getInt16();
+});
+
+Deno.bench("Deno.UnsafePointerView#getUint32", () => {
+  bufferPointerView.getUint32();
+});
+
+Deno.bench("Deno.UnsafePointerView#getInt32", () => {
+  bufferPointerView.getInt32();
+});
+
+Deno.bench("Deno.UnsafePointerView#getBigUint64", () => {
+  bufferPointerView.getBigUint64();
+});
+
+Deno.bench("Deno.UnsafePointerView#getBigInt64", () => {
+  bufferPointerView.getBigInt64();
+});
+
+Deno.bench("Deno.UnsafePointerView#getFloat32", () => {
+  bufferPointerView.getFloat32();
+});
+
+Deno.bench("Deno.UnsafePointerView#getFloat64", () => {
+  bufferPointerView.getFloat64();
 });

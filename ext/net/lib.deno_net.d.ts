@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
@@ -24,9 +24,9 @@ declare namespace Deno {
    *
    * @category Network
    */
-  export interface Listener extends AsyncIterable<Conn> {
+  export interface Listener<T extends Conn = Conn> extends AsyncIterable<T> {
     /** Waits for and resolves to the next connection to the `Listener`. */
-    accept(): Promise<Conn>;
+    accept(): Promise<T>;
     /** Close closes the listener. Any pending accept promises will be rejected
      * with errors. */
     close(): void;
@@ -36,18 +36,25 @@ declare namespace Deno {
     /** Return the rid of the `Listener`. */
     readonly rid: number;
 
-    [Symbol.asyncIterator](): AsyncIterableIterator<Conn>;
+    [Symbol.asyncIterator](): AsyncIterableIterator<T>;
+
+    /**
+     * Make the listener block the event loop from finishing.
+     *
+     * Note: the listener blocks the event loop from finishing by default.
+     * This method is only meaningful after `.unref()` is called.
+     */
+    ref(): void;
+
+    /** Make the listener not block the event loop from finishing. */
+    unref(): void;
   }
 
   /** Specialized listener that accepts TLS connections.
    *
    * @category Network
    */
-  export interface TlsListener extends Listener, AsyncIterable<TlsConn> {
-    /** Waits for a TLS client to connect and accepts the connection. */
-    accept(): Promise<TlsConn>;
-    [Symbol.asyncIterator](): AsyncIterableIterator<TlsConn>;
-  }
+  export type TlsListener = Listener<TlsConn>;
 
   /** @category Network */
   export interface Conn extends Reader, Writer, Closer {
@@ -60,6 +67,20 @@ declare namespace Deno {
     /** Shuts down (`shutdown(2)`) the write side of the connection. Most
      * callers should just use `close()`. */
     closeWrite(): Promise<void>;
+
+    /** **UNSTABLE**: New API, yet to be vetted.
+     *
+     * Make the connection block the event loop from finishing.
+     *
+     * Note: the connection blocks the event loop from finishing by default.
+     * This method is only meaningful after `.unref()` is called.
+     */
+    ref(): void;
+    /** **UNSTABLE**: New API, yet to be vetted.
+     *
+     * Make the connection not block the event loop from finishing.
+     */
+    unref(): void;
 
     readonly readable: ReadableStream<Uint8Array>;
     readonly writable: WritableStream<Uint8Array>;
@@ -82,13 +103,19 @@ declare namespace Deno {
     /** The port to listen on. */
     port: number;
     /** A literal IP address or host name that can be resolved to an IP address.
-     * If not specified, defaults to `0.0.0.0`.
      *
      * __Note about `0.0.0.0`__ While listening `0.0.0.0` works on all platforms,
      * the browsers on Windows don't work with the address `0.0.0.0`.
      * You should show the message like `server running on localhost:8080` instead of
-     * `server running on 0.0.0.0:8080` if your program supports Windows. */
+     * `server running on 0.0.0.0:8080` if your program supports Windows.
+     *
+     * @default {"0.0.0.0"} */
     hostname?: string;
+  }
+
+  /** @category Network */
+  // deno-lint-ignore no-empty-interface
+  export interface TcpListenOptions extends ListenOptions {
   }
 
   /** Listen announces on the local transport address.
@@ -106,11 +133,11 @@ declare namespace Deno {
    * @category Network
    */
   export function listen(
-    options: ListenOptions & { transport?: "tcp" },
+    options: TcpListenOptions & { transport?: "tcp" },
   ): Listener;
 
   /** @category Network */
-  export interface ListenTlsOptions extends ListenOptions {
+  export interface ListenTlsOptions extends TcpListenOptions {
     /** Server private key in PEM format */
     key?: string;
     /** Cert chain in PEM format */
@@ -130,6 +157,12 @@ declare namespace Deno {
     keyFile?: string;
 
     transport?: "tcp";
+
+    /** Application-Layer Protocol Negotiation (ALPN) protocols to announce to
+     * the client. If not specified, no ALPN extension will be included in the
+     * TLS handshake.
+     */
+    alpnProtocols?: string[];
   }
 
   /** Listen announces on the local transport address over TLS (transport layer
@@ -151,7 +184,9 @@ declare namespace Deno {
     /** The port to connect to. */
     port: number;
     /** A literal IP address or host name that can be resolved to an IP address.
-     * If not specified, defaults to `127.0.0.1`. */
+     * If not specified,
+     *
+     * @default {"127.0.0.1"} */
     hostname?: string;
     transport?: "tcp";
   }
@@ -177,17 +212,13 @@ declare namespace Deno {
   /** @category Network */
   export interface TcpConn extends Conn {
     /**
-     * **UNSTABLE**: new API, see https://github.com/denoland/deno/issues/13617.
+     * Enable/disable the use of Nagle's algorithm.
      *
-     * Enable/disable the use of Nagle's algorithm. Defaults to true.
+     * @param [noDelay=true]
      */
-    setNoDelay(nodelay?: boolean): void;
-    /**
-     * **UNSTABLE**: new API, see https://github.com/denoland/deno/issues/13617.
-     *
-     * Enable/disable keep-alive functionality.
-     */
-    setKeepAlive(keepalive?: boolean): void;
+    setNoDelay(noDelay?: boolean): void;
+    /** Enable/disable keep-alive functionality. */
+    setKeepAlive(keepAlive?: boolean): void;
   }
 
   /** @category Network */
@@ -199,7 +230,8 @@ declare namespace Deno {
     /** The port to connect to. */
     port: number;
     /** A literal IP address or host name that can be resolved to an IP address.
-     * If not specified, defaults to `127.0.0.1`. */
+     *
+     * @default {"127.0.0.1"} */
     hostname?: string;
     /**
      * Server certificate file.
@@ -213,6 +245,11 @@ declare namespace Deno {
      *
      * Must be in PEM format. */
     caCerts?: string[];
+    /** Application-Layer Protocol Negotiation (ALPN) protocols supported by
+     * the client. If not specified, no ALPN extension will be included in the
+     * TLS handshake.
+     */
+    alpnProtocols?: string[];
   }
 
   /** Establishes a secure connection over TLS (transport layer security) using
@@ -238,13 +275,19 @@ declare namespace Deno {
   /** @category Network */
   export interface StartTlsOptions {
     /** A literal IP address or host name that can be resolved to an IP address.
-     * If not specified, defaults to `127.0.0.1`. */
+     *
+     * @default {"127.0.0.1"} */
     hostname?: string;
     /** A list of root certificates that will be used in addition to the
      * default root certificates to verify the peer's certificate.
      *
      * Must be in PEM format. */
     caCerts?: string[];
+    /** Application-Layer Protocol Negotiation (ALPN) protocols to announce to
+     * the client. If not specified, no ALPN extension will be included in the
+     * TLS handshake.
+     */
+    alpnProtocols?: string[];
   }
 
   /** Start TLS handshake from an existing connection using an optional list of
@@ -253,9 +296,18 @@ declare namespace Deno {
    * this function requires that the other end of the connection is prepared for
    * a TLS handshake.
    *
+   * Note that this function *consumes* the TCP connection passed to it, thus the
+   * original TCP connection will be unusable after calling this. Additionally,
+   * you need to ensure that the TCP connection is not being used elsewhere when
+   * calling this function in order for the TCP connection to be consumed properly.
+   * For instance, if there is a `Promise` that is waiting for read operation on
+   * the TCP connection to complete, it is considered that the TCP connection is
+   * being used elsewhere. In such a case, this function will fail.
+   *
    * ```ts
    * const conn = await Deno.connect({ port: 80, hostname: "127.0.0.1" });
    * const caCert = await Deno.readTextFile("./certs/my_custom_root_CA.pem");
+   * // `conn` becomes unusable after calling `Deno.startTls`
    * const tlsConn = await Deno.startTls(conn, { caCerts: [caCert], hostname: "localhost" });
    * ```
    *

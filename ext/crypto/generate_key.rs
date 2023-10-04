@@ -1,7 +1,9 @@
-use crate::shared::*;
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+
 use deno_core::error::AnyError;
-use deno_core::op;
-use deno_core::ZeroCopyBuf;
+use deno_core::op2;
+use deno_core::unsync::spawn_blocking;
+use deno_core::ToJsBuffer;
 use elliptic_curve::rand_core::OsRng;
 use num_traits::FromPrimitive;
 use once_cell::sync::Lazy;
@@ -11,6 +13,8 @@ use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::BigUint;
 use rsa::RsaPrivateKey;
 use serde::Deserialize;
+
+use crate::shared::*;
 
 // Allowlist for RSA public exponents.
 static PUB_EXPONENT_1: Lazy<BigUint> =
@@ -38,10 +42,11 @@ pub enum GenerateKeyOptions {
   },
 }
 
-#[op]
+#[op2(async)]
+#[serde]
 pub async fn op_crypto_generate_key(
-  opts: GenerateKeyOptions,
-) -> Result<ZeroCopyBuf, AnyError> {
+  #[serde] opts: GenerateKeyOptions,
+) -> Result<ToJsBuffer, AnyError> {
   let fun = || match opts {
     GenerateKeyOptions::Rsa {
       modulus_length,
@@ -53,7 +58,7 @@ pub async fn op_crypto_generate_key(
       generate_key_hmac(hash, length)
     }
   };
-  let buf = tokio::task::spawn_blocking(fun).await.unwrap()?;
+  let buf = spawn_blocking(fun).await.unwrap()?;
   Ok(buf.into())
 }
 
